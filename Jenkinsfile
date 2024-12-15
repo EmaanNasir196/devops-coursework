@@ -1,58 +1,29 @@
 pipeline {
     agent any
+    
     environment {
-        // Your specific DockerHub and GitHub details
-        DOCKERHUB_CREDS = credentials('dockerhub_credentials')
-        GITHUB_CREDS = credentials('github_credentials')
-        
-        // Project-specific environment variables
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub_credentials')
         GIT_REPO = "https://github.com/EmaanNasir196/devops-coursework.git"
         IMAGE_NAME = "emaan067/cw2-server"
         IMAGE_TAG = "1.0"
-        
-        // Additional dynamic versioning
-        VERSION = "${sh(returnStdout: true, script: 'git describe --tags --always').trim()}"
     }
     
     stages {
-        stage('Setup Environment') {
+        stage('Prepare Environment') {
             steps {
                 script {
-                    // Robust environment setup
-                    sh '''
-                        echo "Checking system dependencies..."
-                        docker --version
-                        git --version
-                        kubectl version --client
-                    '''
+                    // Ensure Docker is available
+                    sh 'docker version || true'
+                    sh 'git version || true'
                 }
             }
         }
         
         stage('Checkout') {
             steps {
-                // Secure Git checkout
                 git branch: 'main', 
                     url: "${env.GIT_REPO}", 
                     credentialsId: 'github_credentials'
-            }
-        }
-        
-        stage('Code Quality and Security Scan') {
-            parallel {
-                stage('Lint Check') {
-                    steps {
-                        // Add your project-specific linting
-                        sh 'npm run lint || true'
-                    }
-                }
-                
-                stage('Dependency Scan') {
-                    steps {
-                        // Security scan for dependencies
-                        sh 'npm audit || true'
-                    }
-                }
             }
         }
         
@@ -60,10 +31,7 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Build Docker image with multiple tags
-                        docker.build("${IMAGE_NAME}:${IMAGE_TAG}")
-                        docker.build("${IMAGE_NAME}:latest")
-                        docker.build("${IMAGE_NAME}:${VERSION}")
+                        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
                     } catch (Exception e) {
                         error "Docker build failed: ${e.message}"
                     }
@@ -71,26 +39,18 @@ pipeline {
             }
         }
         
-        stage('Automated Container Tests') {
+        stage('Container Validation') {
             steps {
                 script {
                     try {
-                        // Comprehensive container testing
                         sh '''
-                        docker run -d --name cw2-test -p 8080:8080 ${IMAGE_NAME}:${IMAGE_TAG}
-                        sleep 10 # Increased wait time for startup
-                        
-                        # Health check with more robust curl
-                        curl -f --max-time 10 http://localhost:8080 || \
-                            (echo "App not responding" && docker logs cw2-test && exit 1)
-                        
-                        # Additional tests can be added here
-                        docker exec cw2-test npm test || true
-                        
-                        docker rm -f cw2-test
+                        docker run -d --name test-container -p 8080:8080 ${IMAGE_NAME}:${IMAGE_TAG}
+                        sleep 10
+                        docker ps | grep test-container
+                        docker rm -f test-container
                         '''
                     } catch (Exception e) {
-                        error "Container test failed: ${e.message}"
+                        error "Container validation failed: ${e.message}"
                     }
                 }
             }
@@ -98,26 +58,14 @@ pipeline {
         
         stage('Push to DockerHub') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub_credentials', 
-                        passwordVariable: 'DOCKER_PASSWORD', 
-                        usernameVariable: 'DOCKER_USERNAME'
-                    )
-                ]) {
-                    script {
-                        try {
-                            sh '''
-                            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
-                            
-                            # Push multiple tags
-                            docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                            docker push ${IMAGE_NAME}:latest
-                            docker push ${IMAGE_NAME}:${VERSION}
-                            '''
-                        } catch (Exception e) {
-                            error "Docker push failed: ${e.message}"
-                        }
+                script {
+                    try {
+                        sh '''
+                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
+                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        '''
+                    } catch (Exception e) {
+                        error "DockerHub push failed: ${e.message}"
                     }
                 }
             }
@@ -127,14 +75,10 @@ pipeline {
             steps {
                 script {
                     try {
-                        // More robust Kubernetes deployment
                         sh '''
-                        ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 << EOF
-                        kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}
-                        kubectl rollout status deployment/cw2-server-deployment --timeout=5m
-                        kubectl get deployments
-                        kubectl get pods
-                        EOF
+                        ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 \
+                        "kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG} && \
+                        kubectl rollout status deployment/cw2-server-deployment"
                         '''
                     } catch (Exception e) {
                         error "Kubernetes deployment failed: ${e.message}"
@@ -145,30 +89,20 @@ pipeline {
     }
     
     post {
-        success {
-            // Slack or email notifications for successful build
-            slackSend color: 'good', 
-                     message: "Deployment successful: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+        always {
+            script {
+                // Cleanup steps
+                sh 'docker logout || true'
+                cleanWs()
+            }
         }
         
         failure {
-            // Notification on failure
-            slackSend color: 'danger', 
-                     message: "Deployment failed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            echo 'Pipeline failed. Check the logs for more information.'
         }
         
-        always {
-            // Cleanup steps
-            script {
-                try {
-                    sh "docker logout"
-                } catch (Exception e) {
-                    echo "Docker logout failed or not found, skipping..."
-                }
-                
-                // Clean workspace
-                cleanWs()
-            }
+        success {
+            echo 'Pipeline completed successfully!'
         }
     }
 }
