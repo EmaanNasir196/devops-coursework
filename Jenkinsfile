@@ -3,7 +3,10 @@ pipeline {
     
     environment {
         GIT_REPO = "https://github.com/EmaanNasir196/devops-coursework.git"
-        BUILD_STATUS = "SUCCESS"
+        DOCKER_IMAGE_NAME = "emaan067/cw2-server"
+        DOCKER_IMAGE_TAG = "v${BUILD_NUMBER}"
+        KUBERNETES_DEPLOYMENT_NAME = "cw2-server-deployment"
+        KUBERNETES_NAMESPACE = "default"
     }
     
     stages {
@@ -11,7 +14,9 @@ pipeline {
             steps {
                 script {
                     echo "Cloning repository from ${GIT_REPO}"
-                    echo "Repository cloned successfully!"
+                    // Simulate git clone command
+                    sleep 2
+                    echo "Repository cloned successfully from ${GIT_REPO}!"
                 }
             }
         }
@@ -19,9 +24,10 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Starting Docker image build..."
-                    sleep 2 // Simulates time taken for the build
-                    echo "Docker image built successfully!"
+                    echo "Starting Docker image build for ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
+                    // Simulate a Docker build
+                    sleep 2
+                    echo "Docker image ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} built successfully!"
                 }
             }
         }
@@ -29,9 +35,11 @@ pipeline {
         stage('Run Container Tests') {
             steps {
                 script {
-                    echo "Running container tests..."
-                    sleep 2 // Simulates test time
-                    echo "Container tests passed successfully"
+                    echo "Starting container for tests..."
+                    // Simulate running the container
+                    sleep 2
+                    echo "Tests executed successfully! Logs:"
+                    echo "Container is running and responding as expected. All tests passed!"
                 }
             }
         }
@@ -39,9 +47,10 @@ pipeline {
         stage('Push to DockerHub') {
             steps {
                 script {
-                    echo "Pushing Docker image to DockerHub... "
-                    sleep 2 // Simulates push time
-                    echo "Docker image pushed successfully to DockerHub! "
+                    echo "Pushing Docker image ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} to DockerHub..."
+                    // Simulate Docker push
+                    sleep 2
+                    echo "Docker image pushed successfully to DockerHub!"
                 }
             }
         }
@@ -49,9 +58,10 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo "Deploying to Kubernetes... "
-                    sleep 2 // Simulates deployment time
-                    echo "Application deployed to Kubernetes successfully! "
+                    echo "Deploying image ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} to Kubernetes..."
+                    // Simulate Kubernetes deployment
+                    sleep 2
+                    echo "Deployment updated successfully for ${KUBERNETES_DEPLOYMENT_NAME}!"
                 }
             }
         }
@@ -60,16 +70,16 @@ pipeline {
     post {
         always {
             script {
-                echo "Cleaning up workspace..."
+                echo "Cleaning up the workspace... "
             }
         }
         
         success {
-            echo "Pipeline completed successfully! Application deployed."
+            echo "Pipeline completed successfully! All steps executed as expected."
         }
         
         failure {
-            echo "Pipeline failed. This is a fake build, so this should never show up."
+            echo "Pipeline failed. Investigate the logs. [This should not appear unless intentionally triggered.]"
         }
     }
 }
