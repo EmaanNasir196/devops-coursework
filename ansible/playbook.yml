@@ -1,10 +1,77 @@
 - hosts: production
   become: yes
-  roles:
-    - k8s_setup
   tasks:
     - name: Install dependencies
       apt:
         name: ["curl", "conntrack", "apt-transport-https", "ca-certificates"]
         state: present
         update_cache: yes
+
+    - name: Install kubectl
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/kubectl
+      args:
+        creates: /usr/local/bin/kubectl
+
+    - name: Install Minikube
+      shell: |
+        curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+        install minikube-linux-amd64 /usr/local/bin/minikube
+      args:
+        creates: /usr/local/bin/minikube
+
+    - name: Start Minikube
+      shell: minikube start --driver=none
+      args:
+        chdir: /home/ubuntu
+      # This might need repeated runs until cluster fully starts
+
+    - name: Create Kubernetes Deployment
+      copy:
+        dest: /home/ubuntu/deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cw2-server-deployment
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cw2-server
+            template:
+              metadata:
+                labels:
+                  app: cw2-server
+              spec:
+                containers:
+                  - name: cw2-server
+                    image: emaan067/cw2-server:1.0
+                    ports:
+                      - containerPort: 8080
+
+    - name: Apply Deployment
+      shell: kubectl apply -f /home/ubuntu/deployment.yaml
+
+    - name: Create Kubernetes Service
+      copy:
+        dest: /home/ubuntu/service.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cw2-server-service
+          spec:
+            type: NodePort
+            selector:
+              app: cw2-server
+            ports:
+              - port: 8080
+                targetPort: 8080
+                nodePort: 30080
+
+    - name: Apply Service
+      shell: kubectl apply -f /home/ubuntu/service.yaml
+
