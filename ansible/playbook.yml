@@ -1,77 +1,198 @@
+---
 - hosts: production
   become: yes
-  tasks:
-    - name: Install dependencies
-      apt:
-        name: ["curl", "conntrack", "apt-transport-https", "ca-certificates"]
-        state: present
-        update_cache: yes
+  vars:
+    minikube_version: v1.32.0
+    kubernetes_version: v1.27.3
+    docker_group: docker
 
-    - name: Install kubectl
-      shell: |
-        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        chmod +x kubectl
-        mv kubectl /usr/local/bin/kubectl
-      args:
-        creates: /usr/local/bin/kubectl
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required system packages
+      apt:
+        name:
+          - curl
+          - wget
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg2
+          - conntrack
+        state: present
+
+    - name: Ensure docker group exists
+      group:
+        name: "{{ docker_group }}"
+        state: present
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: 
+          - "{{ docker_group }}"
+          - sudo
+        append: yes
+
+    - name: Install Docker
+      block:
+        - name: Add Docker GPG key
+          apt_key:
+            url: https://download.docker.com/linux/ubuntu/gpg
+            state: present
+
+        - name: Add Docker repository
+          apt_repository:
+            repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+            state: present
+
+        - name: Install Docker packages
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: present
+            update_cache: yes
+
+        - name: Ensure Docker service is started and enabled
+          systemd:
+            name: docker
+            state: started
+            enabled: yes
+
+    - name: Ensure Docker socket permissions
+      file:
+        path: /var/run/docker.sock
+        owner: root
+        group: "{{ docker_group }}"
+        mode: '0666'
 
     - name: Install Minikube
-      shell: |
-        curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-        install minikube-linux-amd64 /usr/local/bin/minikube
-      args:
-        creates: /usr/local/bin/minikube
+      block:
+        - name: Download Minikube
+          get_url:
+            url: "https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64"
+            dest: /usr/local/bin/minikube
+            mode: '0755'
+
+    - name: Install kubectl
+      block:
+        - name: Download kubectl
+          get_url:
+            url: "https://dl.k8s.io/release/{{ kubernetes_version }}/bin/linux/amd64/kubectl"
+            dest: /usr/local/bin/kubectl
+            mode: '0755'
+
+    - name: Configure system for Minikube
+      block:
+        - name: Adjust system permissions
+          sysctl:
+            name: fs.protected_regular
+            value: '0'
+            state: present
+            reload: yes
 
     - name: Start Minikube
-      shell: minikube start --driver=none
-      args:
-        chdir: /home/ubuntu
-      # This might need repeated runs until cluster fully starts
+      become_user: ubuntu
+      block:
+        - name: Initialize Minikube with Docker driver
+          command: 
+            cmd: minikube start --driver=docker
+          register: minikube_start
+          retries: 3
+          delay: 30
+          until: minikube_start is success
+          environment:
+            CHANGE_MINIKUBE_NONE_USER: true
+            MINIKUBE_HOME: /home/ubuntu
 
     - name: Create Kubernetes Deployment
-      copy:
-        dest: /home/ubuntu/deployment.yaml
-        content: |
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: cw2-server-deployment
-          spec:
-            replicas: 2
-            selector:
-              matchLabels:
-                app: cw2-server
-            template:
+      become_user: ubuntu
+      block:
+        - name: Create Deployment YAML
+          copy:
+            dest: "/home/ubuntu/deployment.yaml"
+            content: |
+              apiVersion: apps/v1
+              kind: Deployment
               metadata:
-                labels:
-                  app: cw2-server
+                name: cw2-server-deployment
               spec:
-                containers:
-                  - name: cw2-server
-                    image: emaan067/cw2-server:1.0
-                    ports:
+                replicas: 2
+                selector:
+                  matchLabels:
+                    app: cw2-server
+                template:
+                  metadata:
+                    labels:
+                      app: cw2-server
+                  spec:
+                    containers:
+                    - name: cw2-server
+                      image: emaan067/cw2-server:1.0
+                      ports:
                       - containerPort: 8080
+                      resources:
+                        requests:
+                          cpu: 100m
+                          memory: 100Mi
+                        limits:
+                          cpu: 200m
+                          memory: 200Mi
 
-    - name: Apply Deployment
-      shell: kubectl apply -f /home/ubuntu/deployment.yaml
+        - name: Create Service YAML
+          copy:
+            dest: "/home/ubuntu/service.yaml"
+            content: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: cw2-server-service
+              spec:
+                type: NodePort
+                selector:
+                  app: cw2-server
+                ports:
+                - protocol: TCP
+                  port: 8080
+                  targetPort: 8080
+                  nodePort: 30080
 
-    - name: Create Kubernetes Service
-      copy:
-        dest: /home/ubuntu/service.yaml
-        content: |
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: cw2-server-service
-          spec:
-            type: NodePort
-            selector:
-              app: cw2-server
-            ports:
-              - port: 8080
-                targetPort: 8080
-                nodePort: 30080
+    - name: Apply Kubernetes Deployment
+      become_user: ubuntu
+      block:
+        - name: Apply Deployment
+          command: 
+            cmd: kubectl apply -f /home/ubuntu/deployment.yaml
+          register: deploy_result
+          changed_when: "'created' in deploy_result.stdout"
 
-    - name: Apply Service
-      shell: kubectl apply -f /home/ubuntu/service.yaml
+        - name: Apply Service
+          command: 
+            cmd: kubectl apply -f /home/ubuntu/service.yaml
+          register: service_result
+          changed_when: "'created' in service_result.stdout"
 
+    - name: Verify Deployment
+      become_user: ubuntu
+      block:
+        - name: Check Deployment Status
+          command: kubectl get deployments
+          register: deployment_status
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Check Service Status
+          command: kubectl get services
+          register: service_status
+          changed_when: false
+          ignore_errors: yes
+
+        - debug:
+            msg: 
+              - "Deployment Status: {{ deployment_status.stdout_lines }}"
+              - "Service Status: {{ service_status.stdout_lines }}"
