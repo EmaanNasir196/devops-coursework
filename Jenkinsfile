@@ -12,28 +12,43 @@ pipeline {
         stage('Prepare Environment') {
             steps {
                 script {
-                    // Ensure Docker is available
-                    sh 'docker version || true'
-                    sh 'git version || true'
+                    // Check for Docker and Git
+                    def dockerInstalled = sh(script: 'which docker', returnStatus: true) == 0
+                    def gitInstalled = sh(script: 'which git', returnStatus: true) == 0
+                    
+                    if (!dockerInstalled) {
+                        error "Docker is not installed. Please install Docker in the Jenkins environment."
+                    }
+                    
+                    if (!gitInstalled) {
+                        error "Git is not installed. Please install Git in the Jenkins environment."
+                    }
                 }
             }
         }
         
         stage('Checkout') {
             steps {
-                git branch: 'main', 
-                    url: "${env.GIT_REPO}", 
-                    credentialsId: 'github_credentials'
+                // Improved error handling for checkout
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    git branch: 'main', 
+                        url: "${env.GIT_REPO}", 
+                        credentialsId: 'github_credentials'
+                }
             }
         }
         
         stage('Build Docker Image') {
             steps {
                 script {
-                    try {
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        // Verify Dockerfile exists before building
+                        def fileExists = fileExists 'Dockerfile'
+                        if (!fileExists) {
+                            error "Dockerfile not found in the repository root"
+                        }
+                        
                         sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
-                    } catch (Exception e) {
-                        error "Docker build failed: ${e.message}"
                     }
                 }
             }
@@ -42,15 +57,14 @@ pipeline {
         stage('Container Validation') {
             steps {
                 script {
-                    try {
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                         sh '''
                         docker run -d --name test-container -p 8080:8080 ${IMAGE_NAME}:${IMAGE_TAG}
                         sleep 10
                         docker ps | grep test-container
+                        docker logs test-container
                         docker rm -f test-container
                         '''
-                    } catch (Exception e) {
-                        error "Container validation failed: ${e.message}"
                     }
                 }
             }
@@ -59,13 +73,16 @@ pipeline {
         stage('Push to DockerHub') {
             steps {
                 script {
-                    try {
-                        sh '''
-                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
-                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                        '''
-                    } catch (Exception e) {
-                        error "DockerHub push failed: ${e.message}"
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        withCredentials([usernamePassword(credentialsId: 'dockerhub_credentials', 
+                                                         usernameVariable: 'DOCKER_USER', 
+                                                         passwordVariable: 'DOCKER_PASS')]) {
+                            sh '''
+                            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                            docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                            docker logout
+                            '''
+                        }
                     }
                 }
             }
@@ -74,14 +91,16 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    try {
-                        sh '''
-                        ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 \
-                        "kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG} && \
-                        kubectl rollout status deployment/cw2-server-deployment"
-                        '''
-                    } catch (Exception e) {
-                        error "Kubernetes deployment failed: ${e.message}"
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        // Use more robust SSH connection with error handling
+                        sshagent(credentials: ['ssh_credentials']) {
+                            sh '''
+                            ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 << EOF
+                            kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}
+                            kubectl rollout status deployment/cw2-server-deployment
+EOF
+                            '''
+                        }
                     }
                 }
             }
@@ -91,18 +110,21 @@ pipeline {
     post {
         always {
             script {
-                // Cleanup steps
-                sh 'docker logout || true'
+                // Enhanced cleanup
+                sh '''
+                docker logout || true
+                docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true
+                '''
                 cleanWs()
             }
         }
         
         failure {
-            echo 'Pipeline failed. Check the logs for more information.'
+            echo 'Pipeline failed. Detailed logs are available for investigation.'
         }
         
         success {
-            echo 'Pipeline completed successfully!'
+            echo 'Pipeline completed successfully! All stages passed.'
         }
     }
 }
