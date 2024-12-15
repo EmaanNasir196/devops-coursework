@@ -2,150 +2,101 @@ pipeline {
     agent any
     
     environment {
-        // Keep GitHub repo as a variable
+        // GitHub repository details
         GIT_REPO = "https://github.com/EmaanNasir196/devops-coursework.git"
         
-        // Hardcoded values for other elements
-        DOCKER_USERNAME = "emaan067"
-        DOCKER_IMAGE_NAME = "cw2-server"
-        DOCKER_IMAGE_TAG = "1.0"
+        // Docker configuration
+        DOCKER_CREDENTIALS = credentials('dockerhub_credentials')
+        DOCKER_IMAGE_NAME = "emaan067/cw2-server"
+        DOCKER_IMAGE_TAG = "v${BUILD_NUMBER}"
+        
+        // Kubernetes configuration
         KUBERNETES_DEPLOYMENT_NAME = "cw2-server-deployment"
         KUBERNETES_NAMESPACE = "default"
-        CONTAINER_PORT = "8080"
         KUBERNETES_SERVER = "54.242.176.196"
     }
     
     stages {
-        stage('Environment Preparation') {
+        stage('Checkout Source Code') {
             steps {
-                script {
-                    // Simulate environment checks with detailed logging
-                    echo "Checking system environment..."
-                    
-                    // Simulate Docker check
-                    try {
-                        sh '''
-                        echo "Docker version check:"
-                        docker --version
-                        '''
-                    } catch (Exception dockerError) {
-                        echo "WARNING: Docker may not be properly installed. Attempting to proceed."
-                        echo "Docker check error: ${dockerError.message}"
-                    }
-                    
-                    // Simulate Git check
-                    try {
-                        sh '''
-                        echo "Git version check:"
-                        git --version
-                        '''
-                    } catch (Exception gitError) {
-                        echo "WARNING: Git may not be properly installed. Attempting to proceed."
-                        echo "Git check error: ${gitError.message}"
-                    }
-                }
+                git branch: 'main', 
+                    url: "${env.GIT_REPO}", 
+                    credentialsId: 'github_credentials'
             }
         }
         
-        stage('Source Code Checkout') {
-            steps {
-                // Checkout from GitHub with error simulation
-                script {
-                    try {
-                        git branch: 'main', 
-                            url: "${env.GIT_REPO}", 
-                            credentialsId: 'github_credentials'
-                        echo "Repository checkout successful!"
-                    } catch (Exception checkoutError) {
-                        echo "SIMULATION: Checkout process encountered a simulated issue."
-                        echo "Checkout error details: ${checkoutError.message}"
-                        // Simulate continuing despite checkout 'error'
-                        error "Simulated checkout failure to demonstrate error handling"
-                    }
-                }
-            }
-        }
-        
-        stage('Docker Image Build') {
+        stage('Build Docker Image') {
             steps {
                 script {
                     try {
-                        // Simulate Docker build with verbose output
-                        sh """
-                        echo "Starting Docker image build..."
-                        docker build -t ${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} . || true
-                        echo "Docker build completed (simulated success)"
-                        docker images | grep ${DOCKER_IMAGE_NAME}
-                        """
+                        // Verify Dockerfile exists
+                        def fileExists = fileExists 'Dockerfile'
+                        if (!fileExists) {
+                            error "Dockerfile not found in the repository root"
+                        }
+                        
+                        // Build Docker image
+                        docker.build("${env.DOCKER_IMAGE_NAME}:${env.DOCKER_IMAGE_TAG}")
                     } catch (Exception buildError) {
-                        echo "SIMULATION: Docker build encountered a simulated issue."
-                        echo "Build error details: ${buildError.message}"
-                        // Force continue despite 'error'
-                        error "Simulated build failure to demonstrate error handling"
+                        echo "Docker build failed: ${buildError.message}"
+                        throw buildError
                     }
                 }
             }
         }
         
-        stage('Container Validation') {
+        stage('Run Container Tests') {
             steps {
                 script {
                     try {
-                        sh """
-                        echo "Attempting to run container..."
-                        docker run -d --name test-container -p ${CONTAINER_PORT}:${CONTAINER_PORT} ${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
-                        sleep 5
-                        echo "Container run log:"
+                        // Run container and perform basic tests
+                        sh '''
+                        docker run -d --name test-container -p 8080:8080 ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
+                        sleep 10
                         docker ps | grep test-container
-                        docker logs test-container || true
-                        docker rm -f test-container || true
-                        """
-                    } catch (Exception containerError) {
-                        echo "SIMULATION: Container validation encountered a simulated issue."
-                        echo "Container error details: ${containerError.message}"
-                        // Force continue despite 'error'
-                        error "Simulated container validation failure"
+                        docker logs test-container
+                        docker rm -f test-container
+                        '''
+                    } catch (Exception testError) {
+                        echo "Container validation failed: ${testError.message}"
+                        throw testError
                     }
                 }
             }
         }
         
-        stage('Simulate DockerHub Push') {
+        stage('Push to DockerHub') {
             steps {
                 script {
                     try {
-                        sh """
-                        echo "Simulating DockerHub login and push..."
-                        echo "Logging in to DockerHub (simulated)..."
-                        echo "Pushing image ${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} (simulated)..."
-                        docker images
-                        """
+                        // Login to DockerHub and push image
+                        docker.withRegistry('https://index.docker.io/v1/', 'dockerhub_credentials') {
+                            docker.image("${env.DOCKER_IMAGE_NAME}:${env.DOCKER_IMAGE_TAG}").push()
+                        }
                     } catch (Exception pushError) {
-                        echo "SIMULATION: DockerHub push encountered a simulated issue."
-                        echo "Push error details: ${pushError.message}"
-                        // Force continue despite 'error'
-                        error "Simulated DockerHub push failure"
+                        echo "DockerHub push failed: ${pushError.message}"
+                        throw pushError
                     }
                 }
             }
         }
         
-        stage('Simulate Kubernetes Deployment') {
+        stage('Deploy to Kubernetes') {
             steps {
                 script {
                     try {
-                        sh """
-                        echo "Simulating Kubernetes deployment..."
-                        echo "Target Server: ${KUBERNETES_SERVER}"
-                        echo "Deployment Name: ${KUBERNETES_DEPLOYMENT_NAME}"
-                        echo "Namespace: ${KUBERNETES_NAMESPACE}"
-                        echo "Simulating kubectl commands..."
-                        """
+                        // Use SSH to connect and update Kubernetes deployment
+                        sshagent(credentials: ['ssh_credentials']) {
+                            sh """
+                            ssh -o StrictHostKeyChecking=no ubuntu@${KUBERNETES_SERVER} << EOF
+                            kubectl set image deployment/${KUBERNETES_DEPLOYMENT_NAME} cw2-server=${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} -n ${KUBERNETES_NAMESPACE}
+                            kubectl rollout status deployment/${KUBERNETES_DEPLOYMENT_NAME} -n ${KUBERNETES_NAMESPACE}
+EOF
+                            """
+                        }
                     } catch (Exception deployError) {
-                        echo "SIMULATION: Kubernetes deployment encountered a simulated issue."
-                        echo "Deployment error details: ${deployError.message}"
-                        // Force continue despite 'error'
-                        error "Simulated Kubernetes deployment failure"
+                        echo "Kubernetes deployment failed: ${deployError.message}"
+                        throw deployError
                     }
                 }
             }
@@ -154,25 +105,22 @@ pipeline {
     
     post {
         always {
+            // Cleanup steps
             script {
-                // Cleanup steps
-                sh """
-                echo "Performing cleanup..."
+                sh '''
                 docker logout || true
-                docker rmi ${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} || true
-                """
+                docker rmi ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} || true
+                '''
                 cleanWs()
             }
         }
         
-        failure {
-            echo '!!! PIPELINE SIMULATION COMPLETED WITH INTENTIONAL ERRORS !!!'
-            echo 'This demonstrates error handling and pipeline flow control.'
+        success {
+            echo 'Pipeline completed successfully! Application deployed.'
         }
         
-        success {
-            echo '=== PIPELINE SIMULATION SUCCESSFUL ==='
-            echo 'All stages passed through error simulation.'
+        failure {
+            echo 'Pipeline failed. Check logs for detailed error information.'
         }
     }
 }
