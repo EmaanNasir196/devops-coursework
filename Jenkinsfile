@@ -9,42 +9,64 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: "${env.GIT_REPO}"
+                script {
+                    node {
+                        git branch: 'main', url: "${env.GIT_REPO}"
+                    }
+                }
             }
         }
         stage('Build Docker Image') {
             steps {
-                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                script {
+                    node {
+                        sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                    }
+                }
             }
         }
         stage('Test Container Launch') {
             steps {
-                sh "docker run -d --name cw2-test -p 8080:8080 ${IMAGE_NAME}:${IMAGE_TAG}"
-                sh "sleep 5" // give the container time to start
-                sh "curl -f http://localhost:8080 || (echo 'App not responding' && exit 1)"
-                sh "docker rm -f cw2-test"
+                script {
+                    node {
+                        sh "docker run -d --name cw2-test -p 8080:8080 ${IMAGE_NAME}:${IMAGE_TAG}"
+                        sh "sleep 5" // give the container time to start
+                        sh "curl -f http://localhost:8080 || (echo 'App not responding' && exit 1)"
+                        sh "docker rm -f cw2-test"
+                    }
+                }
             }
         }
         stage('Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials-id', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
-                    sh "echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin"
+                script {
+                    node {
+                        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials-id', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                            sh "echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin"
+                        }
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    }
                 }
-                sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
             }
         }
         stage('Deploy to Kubernetes') {
             steps {
-                // Update the image in the existing deployment
-                sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}'"
-                // Optionally check rollout status
-                sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl rollout status deployment/cw2-server-deployment'"
+                script {
+                    node {
+                        sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}'"
+                        sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl rollout status deployment/cw2-server-deployment'"
+                    }
+                }
             }
         }
     }
     post {
         always {
-            sh "docker logout"
+            script {
+                node {
+                    sh "docker logout"
+                }
+            }
         }
     }
 }
