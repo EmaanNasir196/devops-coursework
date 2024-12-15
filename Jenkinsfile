@@ -36,9 +36,9 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 // Update the image in the existing deployment
-                sh "ssh -o StrictHostKeyChecking=no ubuntu@<PRODUCTION_SERVER_PUBLIC_IP> 'kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}'"
+                sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl set image deployment/cw2-server-deployment cw2-server=${IMAGE_NAME}:${IMAGE_TAG}'"
                 // Optionally check rollout status
-                sh "ssh -o StrictHostKeyChecking=no ubuntu@<PRODUCTION_SERVER_PUBLIC_IP> 'kubectl rollout status deployment/cw2-server-deployment'"
+                sh "ssh -o StrictHostKeyChecking=no ubuntu@54.242.176.196 'kubectl rollout status deployment/cw2-server-deployment'"
             }
         }
     }
