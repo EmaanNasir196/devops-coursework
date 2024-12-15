@@ -1,0 +1,10 @@
+- hosts: production
+  become: yes
+  roles:
+    - k8s_setup
+  tasks:
+    - name: Install dependencies
+      apt:
+        name: ["curl", "conntrack", "apt-transport-https", "ca-certificates"]
+        state: present
+        update_cache: yes
