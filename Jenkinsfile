@@ -61,12 +61,17 @@ pipeline {
         }
     }
     post {
-        always {
-            script {
-                node {
+    always {
+        script {
+            node {
+                try {
                     sh "docker logout"
+                } catch (Exception e) {
+                    echo "Docker logout failed or not found, skipping..."
                 }
             }
         }
     }
+}
+
 }
