@@ -4,7 +4,8 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                git 'https://github.com/EmaanNasir196/devops-coursework.git'
+                git branch: 'main', // or 'master' depending on your repository
+                    url: 'https://github.com/EmaanNasir196/devops-coursework.git'
             }
         }
         
